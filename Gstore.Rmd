@@ -1,0 +1,458 @@
+---
+title: "Project : Customer Revenue Prediction"
+author: "Jiwon Jeong"
+date: "September 26, 2018"
+output: html_document
+---
+
+# Customer Revenue Prediction 
+
+
+## 1. Exloratory Data Anaylsis 
+ 
+ 
+ This is an Exploratory Data Analysis for the *Google Analytics Customer Revenue Prediction* competition. We are to predict the natural log of the sum of all transactions per user. I skipped all the data pre-processing steps I took. All the code and data set for this article are available on [GitHub](https://github.com/jjone36/myKaggle). Okay so let's take a look at what kind of data our train set has. 
+ 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(tidyverse)
+library(jsonlite)
+library(ggthemes)
+library(magrittr)
+library(lubridate)
+library(rebus)
+library(gridExtra)
+```
+
+```{r}
+train = read.csv('gstore_tr.csv')
+
+train$date = as.Date(train$date)
+
+glimpse(train)
+```
+
+
+
+### 1-1. The target variable : Transaction Revenue 
+
+
+
+ As you can see above, Our target variable 'transaction Revenue' has lots of NAs and we can guess they could be deemed as just no transaction occurred. So we can impute 0. Additionally. the range of the target variable is quite large that it's better to transform data into log scaled. If we plot the distribution of the 'logRevenue', the log-scaled of 'transaction Revenue', is like below.  
+
+
+```{r}
+train$logRevenue = log(train$transactionRevenue)
+train$logRevenue[is.na(train$logRevenue)] = 0
+train = train[, c(24, 1:23)]
+
+summary(train$transactionRevenue, na.rm = T)
+
+train %>%
+  filter(logRevenue > 0) %>% 
+  ggplot(aes(x = logRevenue)) + 
+  geom_histogram(fill = 'steelblue') +
+  theme_bw()
+```
+
+
+
+Another variable that catches my eyes is 'visit Number', or the number of visit of a user, cause ~~~. So I will look into the relations of log-scaled transaction Revenue and visit Number with other variables. As like below, most of the 'visit Number' are 1 and has exponentially decreasing distribution like below, which I filtered the variable over 100. 
+
+
+```{r}
+summary(train$visitNumber)
+
+train %>%
+  count(visitNumber) %>%
+  filter(visitNumber > 100) %>%
+  ggplot(aes(x = visitNumber, y = n)) + geom_col()
+```
+
+
+
+### 2-1. Which channel is the most profitable?
+
+
+
+ There are 7 major channel groups. Organic search is the most frequently used channel and Social and Direct it the next followers.
+
+
+```{r}
+table(train$channelGrouping)
+
+myTheme = theme(axis.text.x = element_text(angle = 45, hjust = 1), 
+                panel.background = element_rect(fill = 'white', color = 'grey50'),
+                panel.grid.major = element_line(color = 'grey90'))
+```
+
+
+ If we get the total revenue per each channel grouping, we can see that Referral is the highest, which is 4th in visit Number. On the other hand, We can see that the Social, the 3rd highest in visit Number, doesn't bring that much revenue in the second plot. This can be inferred there are considerable difference in profit drawn from each channel.      
+
+
+```{r}
+cg_p1 = train %>%
+  group_by(channelGrouping) %>%
+  filter(channelGrouping != '(Other)') %>%
+  count() %>%
+  ggplot(aes(x = reorder(channelGrouping, -n), y = n)) +
+  geom_col(fill = 'steelblue') +
+  scale_y_continuous(labels = scales::comma) +
+  labs(x = 'Channel Grouping', y = 'visit Number') + 
+  myTheme
+
+cg_p2 = train %>%
+  group_by(channelGrouping) %>%
+  filter(channelGrouping != '(Other)') %>%
+  summarise(total_revenue = sum(logRevenue, na.rm = T)) %>%
+  arrange(desc(total_revenue)) %>%
+  ggplot(aes(x = reorder(channelGrouping, -total_revenue), y = total_revenue)) +
+  geom_col(fill = 'coral') +
+  labs(x = 'Channel Grouping', y = 'Total Revenue (log-scaled)') +
+  myTheme
+
+grid.arrange(cg_p1, cg_p2, ncol = 2)
+```
+
+
+ The box plot below tells us the range of revenue per each channel. Please remember this is log-scaled revenue, so the small difference in the plot has large difference in real transaction revenue. 
+
+
+```{r}  
+train %>%
+  filter(channelGrouping != '(Other)', logRevenue > 0) %>%
+  ggplot(aes(x = channelGrouping, y = logRevenue, fill = channelGrouping)) +
+  geom_boxplot(show.legend = F) +
+  labs(x = 'Channel Grouping', y = 'Revenue (log-scaled)') +
+  theme_bw()
+```
+
+
+
+### 2-2. Which device do the users prefer?
+
+
+ Most of the users seem to prefer desktop. When the visit number is over 10, however, the proportion of mobile is higher than desktop. Desktop also has the largest range of revenue and the median value is also the highest. 
+
+
+```{r}
+train %>%
+  group_by(deviceCategory) %>%
+  count(visitNumber) %>%
+  arrange(desc(n)) %>%
+  top_n(n = 15, wt = n) %>%
+  ggplot(aes(x = visitNumber, y = n, fill = deviceCategory)) + 
+  geom_col() +
+  labs(x = NULL, y = 'visit Number') + 
+  theme_bw() 
+
+train %>%
+  filter(logRevenue>0) %>%
+  ggplot(aes(x = deviceCategory, y = logRevenue, fill = deviceCategory)) + 
+  geom_boxplot(show.legend = F) +
+  labs(x = 'Device Category', y = 'Revenue (log-scaled)') + 
+  theme_bw()
+```
+
+
+
+### 2-3. Who are the major users?  
+
+
+ Where are the users coming from? As we can see, and quite obviously, majority of the users are Americans. Asian and European are following the next. 
+
+
+```{r}
+table(train$continent)
+```
+
+
+ When we take a look at revenue per each continent, we can see interesting point in Africa. Considering the visit number of Africa is the smallest, African users give a huge scale of profit to Gstore. 
+
+
+```{r}
+train %>%
+  group_by(continent) %>%
+  filter(continent != '(not set)') %>%
+  count() %>%
+  ggplot(aes(x = reorder(continent, -n), y = n)) + 
+  geom_col(fill = 'steelblue') +
+  scale_y_continuous(labels = scales::comma) +
+  labs(x = NULL, y = 'visit Number') + 
+  theme_bw()
+
+train %>%
+  filter(logRevenue > 0) %>%
+  ggplot(aes(x = continent, y = logRevenue, fill = continent)) + 
+  geom_boxplot(show.legend = F) +
+  labs(x = 'Continent', y = 'Revenue', title = 'Revenue per Continent (log-scaled)') + 
+  theme_bw()
+```
+
+
+ The revenue over time per each continent has various distributions like below and America has the most distinct shape compared to other continent. 
+ 
+```{r}
+train %>%
+  filter(continent != '(not set)', logRevenue>0) %>%
+  ggplot(aes(x = date, y = logRevenue, color = continent)) + 
+  geom_line(show.legend = F, size = .5) +
+  facet_wrap(continent~.) +
+  labs(x = NULL, y = 'Revenue', title = 'Revenue changes over time') + 
+  theme_bw()
+```
+
+
+ If we see closer to each sub continent in America, the most of the transaction occurs in Northern America and that time distribution of America is same with that of Northern America. 
+
+
+```{r}
+train %>%
+  filter(continent == 'Americas', logRevenue > 0) %>%
+  group_by(subContinent) %>%
+  count() %>%
+  arrange(desc(n))
+
+train %>%
+  filter(continent == 'Americas', logRevenue>0) %>%
+  ggplot(aes(x = date, y = logRevenue, col = subContinent)) + 
+  geom_line() + 
+  geom_smooth(color = 'black', se = F, size = .7) +
+  facet_wrap(.~subContinent, nrow = 2) + 
+  theme_bw()
+```
+
+
+
+### 2-4. When is the high season of Gstore? 
+
+
+ We all can easily guess when is the highest season for any kind of stores and malls all over the world. Black Friday! Let's check it's also ture for Gstore. Our train set has the data from 'range(train$date)'. 
+
+
+```{r}
+train %>%
+  group_by(date, deviceCategory) %>%
+  count() %>% 
+  ggplot(aes(x = date, y = n, col = deviceCategory)) + 
+  geom_line(show.legend = F) +
+  facet_grid(deviceCategory~ ., space = 'free_y') +
+  geom_vline(xintercept = as.Date(c('2016-10-4', '2016-11-28')), 
+             color = 'Orange', size = 4, alpha = .3) +
+  labs(x = NULL, y = 'Visit Number') +
+  theme_bw()
+```
+
+
+ It starts to increase from October and it reaches the highest around the last week of December, which is the Black Friday. But there is not that much fluctutaion to mobile and tablet device. From what we saw with the plot of the deviceCategory verse visit Number, we can say that it is because the majority of users prefer desktop than other devices.
+
+
+```{r}
+train %>%
+  filter(logRevenue > 0) %>%
+  group_by(year(date)) %>%
+  ggplot(aes(x = logRevenue, fill = factor(year(date)))) + 
+  geom_density(alpha = .3) +
+  labs(x = "Revenue (log scaled)", y = NULL, title = "Revenue Distribution per Year") + 
+  theme_bw()
+
+train %>%
+  group_by(year(date)) %>%
+  summarise(median = median(transactionRevenue, na.rm = T),
+            mean = mean(transactionRevenue, na.rm = T)) 
+```
+
+
+ The density plot of revenue has similar shape in 2016 and 2017. But there a small difference in mean values, which becomes a quite considerable gap when it's considered in actual scale.   
+
+
+```{r}
+train %>%
+  group_by(date, deviceCategory) %>%
+  summarise(total_revenue = sum(logRevenue)) %>%
+  ggplot(aes(x = date, y = total_revenue, col = deviceCategory)) + 
+  geom_line(show.legend = F) +
+  facet_grid(deviceCategory ~., space = 'free_y') +
+  geom_vline(xintercept = as.Date('2016-12-07'), 
+             color = 'Orange', size = 13, alpha = .3) +
+  geom_vline(xintercept = as.Date('2017-05-01'), 
+             color = 'Orange', size = 6, alpha = .3) +
+  labs(x = NULL, y = 'Total Revenue') +
+  theme_bw()
+
+train %>%
+  filter(deviceCategory == 'desktop') %>%
+  group_by(date) %>%
+  summarise(total_revenue = sum(logRevenue)) %>%
+  arrange(desc(total_revenue)) %>%
+  head(10)
+
+```
+
+
+ The total revenue over the time period has the two peak time at first week of December and May. If we continue to think with the plot we saw with the number of visit verse time, people seem to start surfing the web from Octorber and make actual purchases from the last week of Noverbem. There is another peak on first week of May although we have no clue what happened during that period. The actual transaction revenue and its time can be seen like above.  
+
+ 
+ 
+### 2-5. When do the uses usually order google swag products? 
+
+
+ If we see when the uses are usually to make an order during a week, we can find the amount of visit number or revenue during weekend is lower than that of weekdays. As a person who has a habit to put things in my cart during weekend and purchase them all at once on weekend, this is somewhat unexpected result for me. 
+
+ 
+```{r}
+weekly_p1 = train %>%
+  group_by(weekday = wday(date, label = T)) %>%
+  count() %>%
+  ggplot(aes(x = weekday, y = n)) + 
+  geom_col(fill = 'steelblue') + 
+  labs(x = NULL, y = NULL, title = 'Weekly Visit Numbers') + 
+  theme_bw()
+
+weekly_p2 = train %>%
+  group_by(weekday = wday(date, label = T)) %>%
+  summarise(total_revenue = sum(logRevenue, na.rm = T)) %>%
+  ggplot(aes(x = weekday, y = total_revenue)) + 
+  geom_col(fill = 'coral1') + 
+  labs(x = NULL, y = NULL, title = 'Weekly Revenue') +
+  theme_bw()
+  
+grid.arrange(weekly_p1, weekly_p2, nrow = 2)
+```
+
+
+
+### 2-6. What browsers are the major web sites? 
+
+
+ Most of the users use Chrome and Safari for their browser. The gap between chrome and any other browsers are so large that I compared the difference of revenue divided by the number of visits per each browser. Consequently we can see aother trends among browsers except the fact that Chrome is the highest. Although the number of visit by Edge is low, the proportional revenue comes to the second major browser. 
+
+
+```{r message=FALSE}
+browser_n = train %>%
+  filter(!is.na(browser)) %>%
+  group_by(browser) %>%
+  count() %>%
+  arrange(desc(n)) 
+
+browser_p1 = browser_n[1:10, ] %>%
+  ggplot(aes(x = reorder(browser, n), y = n)) + 
+  geom_col(fill = 'steelblue') +
+  coord_flip() +
+  scale_y_continuous(labels = scales::comma) +
+  labs(y = 'Visit Number', x = NULL, title = 'Visit Number per Browser') +
+  theme_bw()
+
+browser_p2 = train %>%
+  group_by(browser) %>%
+  summarise(total_revenue = sum(logRevenue>0)) %>%
+  right_join(browser_n) %>%
+  mutate(prop_revenue = total_revenue / n) %>%
+  arrange(desc(prop_revenue)) %>%
+  head(10) %>%
+  ggplot(aes(x = reorder(browser, prop_revenue), y = prop_revenue)) + 
+  geom_col(fill = 'coral1') + 
+  coord_flip() +
+  labs(y = 'Total Revenue / Visit Numbers', x = NULL, title = 'Proportional Revenue per Browser') +
+  theme_bw()
+
+grid.arrange(browser_p1, browser_p2, ncol = 2)
+```
+
+
+
+### 2-7. Do the operation systems have any tendency among the users? 
+
+
+ I also compared the proportional revenue for the operation systems like I did with browsers, and again, there are some changes in orders of operations systems like below. 
+
+
+```{r message=FALSE}
+os_n = train %>%
+  filter(operatingSystem != '(not set)') %>%
+  group_by(operatingSystem) %>%
+  count() %>%
+  arrange(desc(n))
+
+os_p1 = os_n[1:10, ] %>%
+ggplot(aes(x = reorder(operatingSystem, -n), y = n)) +
+  geom_col(fill = 'steelblue') +
+  scale_y_continuous(labels = scales::comma) +
+  labs(x = NULL, y = NULL, title = 'Visit Number per OS') + 
+  myTheme
+
+os_p2 = train %>%
+  group_by(operatingSystem) %>%
+  summarise(total_revenue = sum(logRevenue, na.rm = T)) %>%
+  right_join(os_n) %>%
+  mutate(prop_revenue = total_revenue / n) %>%
+  arrange(desc(prop_revenue)) %>%
+  head(10) %>%
+  ggplot(aes(x = reorder(operatingSystem, -prop_revenue), y = prop_revenue)) + 
+  geom_col(fill = 'coral1') +
+  labs(x = NULL, y = NULL, title = 'Proportional Revenue per OS (Total Revenue / Visit Number)') + 
+  myTheme
+
+grid.arrange(os_p1, os_p2, nrow = 2)
+```
+
+
+
+### 2-8. What about sources, mediums and Keywords? 
+
+
+ There are large number of variance in soruces in raw dataset, so I cleaned them up into smaller categories. After integrating and filtering, we can see that major sources are google and youtube. When it comes to medium, organic and referral are the two top. Keyword seems not that nutritious variable for predicting transaction revenue for little information. 
+
+
+```{r}
+train %>%   
+  group_by(source) %>%
+  count() %>%
+  arrange(desc(n)) %>%
+  head(10) %>%
+  ggplot(aes(x = reorder(source, -n), y = n)) +
+  geom_col(fill = 'lightseagreen') +
+  labs(x = NULL, y = NULL, title = 'Visit Number per Source') + 
+  myTheme
+
+train %>%
+  group_by(medium) %>%
+  count() %>%
+  arrange(desc(n)) %>%
+  head(10) %>%
+  ggplot(aes(x = reorder(medium, -n), y = n)) +
+  geom_col(fill = 'lightseagreen') +
+  scale_y_continuous(labels = scales::comma) +
+  labs(x = NULL, y = NULL, title = 'Visit Number per Medium') +
+  theme_bw()
+
+train %>%
+  filter(!is.na(keyword) & keyword != '(not provided)') %>%
+  group_by(keyword) %>%
+  count() %>%
+  arrange(desc(n)) %>%
+  head(10)
+```
+
+
+
+### 2-9. Is there any tendency 
+
+
+ Finally let's check the relation between the number of visits and revenue. I limit the range of visit numbers to see more clearly the tendency. The orange line is drawn using gam regression and seems flatten, which means there are no increasing or decreasing trend between the two variables.
+
+
+```{r message=FALSE}
+train %>%
+  filter(logRevenue>0) %>%
+  ggplot(aes(x = visitNumber, y = logRevenue)) + 
+  geom_jitter(color = 'steelblue') +
+  geom_smooth(color = 'Orange') +
+  scale_x_continuous(limits = c(0, 50)) +
+  labs(x = 'Visit Number', y = 'Revenue (log-sclaed)') +
+  theme_bw()
+```
+
+
+
+
