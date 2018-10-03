@@ -1,139 +1,147 @@
 library(tidyverse)
+library(data.table)
 library(jsonlite)
 library(ggthemes)
 library(magrittr)
 library(lubridate)
 library(rebus)
 library(gridExtra)
+library(caret)
+library(glmnet)
+library(gbm)
+library(xgboost)
 
-train = read.csv('train.csv', stringsAsFactors = T) 
-test = read.csv('test.csv', stringsAsFactors = T) 
+# This is the full code for the competition 'Google Analytics Customer Revenue Prediction' held in Kaggle.
+
+## 1. Reading the dataset ####
+train = read_csv('train.csv') 
+test = read_csv('test.csv') 
 
 full = rbind(train, test)
-
-#### Preprocessing ####
 str(full)
 
-## channelGrouping
-table(full$channelGrouping)
-
-## date
+## 2. Preprocessing columns one by one ####
+# date
 full$date = ymd(full$date)
 
-# device ####
-str(full$device)
+# visitStartTime
+full$visitStartTime = as.POSIXct(full$visitStartTime, tz = 'UTC', origin = '1970-01-01')
+
+# device 
 device = paste("[", paste(full$device, collapse = ","), "]") %>% fromJSON()
 str(device)
-device = as.tibble(device)
-summary(device)
-
-table(device$browser)
-device$browser = ifelse(nchar(device$browser) >= 20, NA, device$browser)
-device$isMobile = factor(device$isMobile, labels = c(0, 1))
+names(device)
 
 device = device[, names(device) %in% c('browser', 'operatingSystem', 'isMobile', 'deviceCategory')]
 
 full$device = NULL
 full = cbind(full, device)
 
-# geoNetwork ####
-str(full$geoNetwork)
+# geoNetwork
 geoNetwork = paste("[", paste(full$geoNetwork, collapse = ", "), "]") %>% fromJSON()
+str(geoNetwork)
 
-head(geoNetwork)
-table(geoNetwork$networkDomain)
-geo_sub = geoNetwork[names(geoNetwork) %in% c('continent', 'subContinent', 'country', 'networkDomain')]
-full = cbind(full, geo_sub)
+sum(geoNetwork$metro == 'not available in demo dataset')  
+sum(geoNetwork$region == 'not available in demo dataset')  
+sum(geoNetwork$city == 'not available in demo dataset')  # dropping the columns cause most of them don't give informations
+
+geoNetwork = geoNetwork[names(geoNetwork) %in% c('continent', 'subContinent', 'country', 'networkDomain')]
+
 full$geoNetwork = NULL
+full = cbind(full, geoNetwork)
 
-# socialEngagementType ####
-table(full$socialEngagementType)
+# socialEngagementType 
+table(full$socialEngagementType)  # also dropping this column due to lack of information
 full$socialEngagementType = NULL
 
-# totals ####
-str(full$totals)
+# totals 
 totals = paste("[", paste(full$totals, collapse = ", "), "]") %>% fromJSON()
-head(totals)
 str(totals)
 
-# visits columne
 table(totals$visits)  
-which(is.na(totals$visits))
 totals$visits = NULL
 
-# hits columne
 table(totals$hits)
 totals$hits = as.numeric(totals$hits)
 summary(totals$hits)
-hist(totals$hits, xlim = c(0, 100))
 
-# pageview columne
 table(totals$pageviews)
-sum(is.na(totals$pageviews))
 totals$pageviews = as.numeric(totals$pageviews)
+summary(totals$pageviews)
 
-# bounces columne
 table(totals$bounces)
 which(is.na(totals$bounces))
 totals$bounces[is.na(totals$bounces)] = 0
-totals$bounces = as.factor(totals$bounces)
+totals$bounces = as.numeric(totals$bounces)
 
-# newVisits columne
 table(totals$newVisits)
 totals$newVisits[is.na(totals$newVisits)] = 0
 totals$newVisits = as.numeric(totals$newVisits)
 
-# transactionRevenue columne
-range(totals$transactionRevenue, na.rm = T)
+range(totals$transactionRevenue, na.rm = T)   # The target variable
 totals$transactionRevenue = as.numeric(totals$transactionRevenue)
 
 full = cbind(full, totals)
 full$totals = NULL
 
-# trafficSource ####
+# trafficSource 
 str(full$trafficSource)
 trafficSource = paste("[", paste(full$trafficSource, collapse = ", "), "]") %>% fromJSON()
 str(trafficSource)
-full$trafficSource = NULL
 
 df = trafficSource$adwordsClickInfo
+str(df)
 df$targetingCriteria = NULL
+
+table(df$criteriaParameters) 
+df$criteriaParameters = NULL
+
+table(df$page)
+df$page[is.na(df$page)] = 0
+table(df$slot)
+
+table(df$gclId)
+df$gclId = NULL
+
+table(df$adNetworkType)
+table(df$isVideoAd)
+df$isVideoAd = ifelse(is.na(df$isVideoAd), 1, 0)
+
 trafficSource = cbind(trafficSource, df)
+trafficSource$adwordsClickInfo = NULL
+str(trafficSource)
 
-which(!is.na(trafficSource$campaignCode))
+table(trafficSource$isTrueDirect)
+trafficSource$isTrueDirect = ifelse(is.na(trafficSource$isTrueDirect), 0, 1)
 
-trafficSource[, names(trafficSource) %in% c('adwordsClickInfo', 'criteriaParameter',
-                                            'campaignCode', 'gclId', 'referralPath')] = NULL
+table(trafficSource$adContent)
 
-tfs_sub = trafficSource %>%
-  select(source, medium, keyword)
-head(tfs_sub)
+trafficSource$referralPath = NULL
+trafficSource$campaignCode = NULL
 
-tfs_sub$source[grepl(pattern = 'google', x = tfs_sub$source)] = 'google'
-tfs_sub$source[grepl(pattern = 'yahoo', x = tfs_sub$source)] = 'yahoo'
-tfs_sub$source[grepl(pattern = 'youtube', x = tfs_sub$source)] = 'youtube'
-tfs_sub$source[grepl(pattern = 'reddit', x = tfs_sub$source)] = 'reddit'
-tfs_sub$source[grepl(pattern = 'facebook', x = tfs_sub$source)] = 'facebook'
-table(tfs_sub$source)
+trafficSource$source[grepl(pattern = 'google', x = trafficSource$source)] = 'google'
+trafficSource$source[grepl(pattern = 'yahoo', x = trafficSource$source)] = 'yahoo'
+trafficSource$source[grepl(pattern = 'youtube', x = trafficSource$source)] = 'youtube'
+trafficSource$source[grepl(pattern = 'reddit', x = trafficSource$source)] = 'reddit'
+trafficSource$source[grepl(pattern = 'facebook', x = trafficSource$source)] = 'facebook'
+table(trafficSource$source)
 
-a = tfs_sub %>%
+a = trafficSource %>%
   group_by(source) %>%
   count() %>%
   filter(n < 1000)
 
-tfs_sub$source[tfs_sub$source %in% a$source] = 'other'
+trafficSource$source[trafficSource$source %in% a$source] = 'other'
 
-full = cbind(full, tfs_sub)
+full = cbind(full, trafficSource)
+full$trafficSource = NULL
 
 part = 1:nrow(train)
 train = full[part, ]
 test = full[-part, ]
 
 
-write.csv(train, 'gstore_tr.csv', row.names = F)
-write.csv(test, 'gstore_te.csv', row.names = F)
-
-
+## 3. Exploratory data analysis ####
 summary(train$visitNumber)
 
 train %>%
@@ -156,7 +164,6 @@ train %>%
   theme_bw()
 
 
-#### EDA ####
 # visitNumber/Revenue ~ channelGrouping 
 table(train$channelGrouping)
 
@@ -185,13 +192,14 @@ cg_p2 = train %>%
   myTheme
 
 grid.arrange(cg_p1, cg_p2, ncol = 2)
-  
+
 train %>%
   filter(channelGrouping != '(Other)') %>%
   ggplot(aes(x = channelGrouping, y = logRevenue, fill = channelGrouping)) +
   geom_boxplot(show.legend = F) +
   labs(x = 'Channel Grouping', y = 'Revenue (log-scaled)') +
   theme_bw()
+
 
 # visitNumber/Revenue ~ deviceCategory
 train %>%
@@ -208,6 +216,7 @@ ggplot(train, aes(x = deviceCategory, y = logRevenue, fill = deviceCategory)) +
   geom_boxplot(show.legend = F) +
   labs(x = 'Device Category', y = 'Revenue (log-scaled)') + 
   theme_bw()
+
 
 # visitNumber/Revenue ~ continent
 table(train$continent)
@@ -244,6 +253,7 @@ train %>%
   geom_smooth(color = 'black', se = F, size = .7) +
   facet_wrap(.~subContinent, nrow = 2) + 
   theme_bw()
+
 
 # time ~ visitNumber/revenue by each device (+ peak season)
 train %>%
@@ -288,6 +298,7 @@ train %>%
   summarise(total_revenue = sum(logRevenue, na.rm = T)) %>%
   arrange(desc(total_revenue)) 
 
+
 # weekly by each device / continent 
 weekly_p1 = train %>%
   group_by(weekday = wday(date, label = T)) %>%
@@ -304,12 +315,8 @@ weekly_p2 = train %>%
   geom_col(fill = 'coral1') + 
   labs(x = NULL, y = NULL, title = 'Weekly Total Revenue') +
   theme_bw()
-  
-grid.arrange(weekly_p1, weekly_p2, nrow = 2)
 
-# visitStartTime 
-str(train$visitStartTime)
-train[, 3:8] %>% head()
+grid.arrange(weekly_p1, weekly_p2, nrow = 2)
 
 # browser ~ visit Number / Revenue
 browser_n = train %>%
@@ -341,6 +348,7 @@ browser_p2 = train %>%
 
 grid.arrange(browser_p1, browser_p2, ncol = 2)
 
+
 # Operation System ~ visit Number
 os_n = train %>%
   filter(operatingSystem != '(not set)') %>%
@@ -349,7 +357,7 @@ os_n = train %>%
   arrange(desc(n))
 
 os_p1 = os_n[1:10, ] %>%
-ggplot(aes(x = reorder(operatingSystem, -n), y = n)) +
+  ggplot(aes(x = reorder(operatingSystem, -n), y = n)) +
   geom_col(fill = 'steelblue') +
   scale_y_continuous(labels = scales::comma) +
   labs(x = NULL, y = NULL, title = 'Visit Number per OS') + 
@@ -368,6 +376,7 @@ os_p2 = train %>%
   myTheme
 
 grid.arrange(os_p1, os_p2, nrow = 2)
+
 
 # Source. Medium. Keyword
 train %>%   
@@ -397,6 +406,7 @@ train %>%
   arrange(desc(n)) %>%
   head(20)
 
+
 # visitNumber ~ Revenue
 ggplot(train, aes(x = visitNumber, y = logRevenue)) + 
   geom_jitter(color = 'steelblue') +
@@ -407,80 +417,192 @@ ggplot(train, aes(x = visitNumber, y = logRevenue)) +
 
 
 
-#### Estimation ####
-library(caret)
+## 4. Cleaning and splitting the data ####
+str(full)
 
-names(train)
-str(train)
-
+# splitting date & time into each column
 full$year = year(full$date) %>% as.factor()
-full$month = month(full$date) %>% as.factor()
+full$month = month(full$date) %>% as.factor() 
 full$day = day(full$date) %>% as.factor()
-full$week = wday(full$date) %>% as.factor()
+full$wday = wday(full$date) %>% as.factor()
+full$week = week(full$date) %>% as.factor()
+full$hour = hour(full$visitStartTime) %>% as.factor()
+full$minute = minute(full$visitStartTime) %>% as.factor()
 
-full$operatingSystem = as.factor(full$operatingSystem)
-full$deviceCategory = as.factor(full$deviceCategory)
-full$continent = as.factor(full$continent)
-full$subContinent = as.factor(full$subContinent)
-
+# removing some observations which takes small proportion
 b = full %>%
   group_by(browser) %>%
   count() %>%
   filter(n < 5000)
-  
+
 full$browser[full$browser %in% b$browser] = 'other'
 full$browser[full$browser == 'Safari (in-app)'] = 'Safari'
 table(full$browser)
 
-full$browser = as.factor(full$browser)
+b = full %>%
+  group_by(source) %>%
+  count() %>%
+  filter(n < 3000)
+full$source[full$source %in% b$source] = 'other'
+table(full$source)
+
+# transforming scales 
 full$logRevenue = log(full$transactionRevenue)
+full$logvisitNumber = log(full$visitNumber)
+full$loghits = log(full$hits)
 
-saveRDS(object = full, file = 'Gstore_full.rds')
+summary(full$pageviews)
+full$pageviews[is.na(full$pageviews)] = 1
+full$logpageviews = log(full$pageviews)
 
-full_df = full[, !names(full) %in% c('date', 'fullVisitorId', 'sessionId', 'visitId', 'visitStartTime', 
-                                     'source', 'medium', 'country', 'networkDomain', 'transactionRevenue', 'keyword')]
+# replacing na's into 'Other' 
+str(full)
+table(full$slot)
+full$slot[is.na(full$slot)] = 'Other'
+sum(is.na(full$adNetworkType))
+full$adNetworkType[is.na(full$adNetworkType)] = 'Other'
 
-tr_df = full_df[part, ]
-te_df = full_df[-part, ]
+# selecting subset of variables which will be used for fitting the models 
+full_df = full[, !names(full) %in% c('date', 'fullVisitorId', 'sessionId', 'visitId', 'visitNumber', 'visitStartTime', 'networkDomain', 
+                                     'hits', 'pageviews', 'transactionRevenue', 'keyword', 'adContent')]
+str(full_df)
+full_df = full_df[, c(26, 1:25, 27:29)]
 
-tr_df$logRevenue[is.na(tr_df$logRevenue)] = 0
-tr_df = tr_df[, c(19, 1:18)]
-str(tr_df)
+full_df = full_df %>%
+  mutate_if(is.character, factor) %>%
+  mutate(isMobile = ifelse(isMobile == FALSE, 0, 1))
+
+# splitting data into trainset, validset, and testset
+part = 1:903653
+tr = full_df[part, ]
+tr$logRevenue[is.na(tr$logRevenue)] = 0
+
+ind = sample(x = 2, size = nrow(tr), replace = T, prob = c(.7, .3))
+valid = tr[ind == 2, ]
+tr = tr[ind == 1, ]
+
+te = full_df[-part, ]
 
 
-## GBM
-library(gbm)
-model_gbm = gbm(formula = logRevenue ~., distribution = 'gaussian', 
-                data = tr_df, n.trees = 3000)
+## 5. Fitting the models ####
+## 5-1. GBM 
+model_gbm = gbm(formula = logRevenue ~., data = tr,
+                distribution = 'gaussian', 
+                n.trees = 1000, 
+                n.minobsinnode = 100, 
+                shrinkage = .01,
+                cv.folds = 10)
 
 (opt_ntree_oob = gbm.perf(object = model_gbm, method = 'OOB'))
-pred_oob = predict(object = model_gbm, newdata = te_df, n.trees = opt_ntree_oob, type = 'response')
 
-hist(pred_oob)
+pred_oob = predict(object = model_gbm, newdata = valid, n.trees = opt_ntree_oob, type = 'response')
+pred_gbm = ifelse(pred_oob < 0, 0, pred_oob)
 
 
-test$PredictedLogRevenue = pred_oob
+## 5-2. Xgboost 
+full_df2 = full_df %>%
+  mutate_if(is.factor, as.integer)
+str(full_df2)
+
+part = 1:903653
+tr_xgb = full_df2[part, ]
+te_xgb = full_df2[-part, ]
+
+tr_xgb$logRevenue[is.na(tr_xgb$logRevenue)] = 0
+val_xgb = tr_xgb[ind == 2, ]
+tr_xgb = tr_xgb[ind == 1, ]
+
+dtr = xgb.DMatrix(data = data.matrix(tr_xgb[, -1]), label = tr_xgb$logRevenue)
+dval = xgb.DMatrix(data = data.matrix(val_xgb[, -1]), label = val_xgb$logRevenue)
+dte = xgb.DMatrix(data = data.matrix(te_xgb[, -1]), label = te_xgb$logRevenue)
+
+# training a xgb model
+myParam = list(objective = 'reg:linear', 
+               eval_metric = 'mae',
+               eta = .025,
+               max_depth = 8, 
+               min_child_weight = 10,
+               subsample = .7,
+               colsample_bytree = .5)
+
+cv = xgb.cv(data = dtr, 
+            params = myParam, 
+            nrounds = 3000,
+            nfold = 5, 
+            early_stopping_rounds = 100, 
+            maximize = F, 
+            print_every_n = 50)
+
+a = cv$evaluation_log$test_mae_mean %>% which.min()
+cv$evaluation_log[a]
+cv$best_iteration
+
+model_xgb = xgb.train(data = dtr,
+                      params = myParam,
+                      nrounds = cv$best_iteration,
+                      watchlist = list(val = dval),
+                      print_every_n = 50,
+                      early_stopping_rounds = 100)
+
+pred_xgb = predict(model_xgb, dval)
+
+pred_xgb = ifelse(pred_xgb < 0, 0, pred_xgb)
+hist(pred_xgb)
+
+xgb.importance(feature_names = names(tr_xgb), model = model_xgb) %>% xgb.plot.importance(top_n = 15)
+
+## 5-3. GLMNET 
+memory.limit(56000)
+
+full_x = full_df[, -1] %>%
+  model.matrix(~.-1, data = .)
+
+full_y = full_df$logRevenue
+
+# splitting trainset and valiedset
+tr_glm_x = full_x[part, ]
+te_glm_x = full_x[-part, ]
+tr_glm_y = full_y[part]
+
+# Splitting trainset into train and validation 
+tr_glm_y = ifelse(is.na(tr_glm_y), 0, tr_glm_y)
+valid_glm_x = tr_glm_x[ind == 2, ]
+
+tr_glm_x = tr_glm_x[ind == 1, ]
+tr_glm_y = tr_glm_y[ind == 1]
+
+# fitting the glmnet model
+model_glmnet = cv.glmnet(x = tr_glm_x, y = tr_glm_y, family = 'gaussian', 
+                         nfolds = 5, alpha = 0, type.measure = 'mse')
+model_glmnet$lambda.min
+
+pred_glmnet = predict(model_glmnet, newx = valid_glm_x, s = 'lambda.min')
+pred_glmnet = ifelse(pred_glmnet < 0, 0, pred_glmnet)
+
+
+## comparison model
+hist(valid$logRevenue)
+hist(pred_gbm)
+hist(pred_xgb)
+hist(pred_glmnet)
+
+
+## 6. selecting the xgb model and submit ####
+test = fread('test.csv')
+pred = predict(model_xgb, dte)
+pred = ifelse(pred < 0, 0, pred)
+test$pred = pred
+
 mysub = test %>%
-  select(fullVisitorId, PredictedLogRevenue)
-write.csv(mysub, file = 'submission_gbm.csv', row.names = F)
-
-submission = read.csv('sample_submission.csv')
-names(submission)
-
-mysub = data.frame(fullVisitorId = test$fullVisitorId, Pred = pred_oob)
-head(mysub)
-
-mysub = mysub %>%
+  select(fullVisitorId, pred) %>%
   group_by(fullVisitorId) %>%
-  summarise(Predicted = sum(Pred))
+  summarise(PredictedLogRevenue = sum(pred))
 
-mysub = submission %>%
-  left_join(mysub, by = 'fullVisitorId')
-mysub$PredictedLogRevenue = NULL
-names(mysub) = names(submission)
+mysub$PredictedLogRevenue = round(mysub$PredictedLogRevenue, digits = 5)
 
-write.csv(mysub, file = 'submission_gbm.csv', row.names = F)
+write.csv(mysub, file = 'sub.csv', row.names = F)
 
-submission_gbm = read.csv('submission_gbm.csv')
+
+
 
 
