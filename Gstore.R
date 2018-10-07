@@ -12,6 +12,8 @@ library(gbm)
 library(xgboost)
 
 # This is the full code for the competition 'Google Analytics Customer Revenue Prediction' held in Kaggle.
+# This competition is to predict revenue per customer of a Google Merchandise Store 
+# You can find the full dataset here: https://www.kaggle.com/c/ga-customer-revenue-prediction
 
 ## 1. Reading the dataset ####
 train = read_csv('train.csv') 
@@ -27,8 +29,12 @@ full$date = ymd(full$date)
 # visitStartTime
 full$visitStartTime = as.POSIXct(full$visitStartTime, tz = 'UTC', origin = '1970-01-01')
 
+# browser
+table(full$browser)
+full$browser[str_length(full$browser) > 25] = 0
+
 # device 
-device = paste("[", paste(full$device, collapse = ","), "]") %>% fromJSON()
+device = paste("[", paste(full$device, collapse = ","), "]") %>% fromJSON(flatten = T)
 str(device)
 names(device)
 
@@ -38,14 +44,10 @@ full$device = NULL
 full = cbind(full, device)
 
 # geoNetwork
-geoNetwork = paste("[", paste(full$geoNetwork, collapse = ", "), "]") %>% fromJSON()
-str(geoNetwork)
+geoNetwork = paste("[", paste(full$geoNetwork, collapse = ", "), "]") %>% fromJSON(flatten = T)
+names(geoNetwork)
 
-sum(geoNetwork$metro == 'not available in demo dataset')  
-sum(geoNetwork$region == 'not available in demo dataset')  
-sum(geoNetwork$city == 'not available in demo dataset')  # dropping the columns cause most of them don't give informations
-
-geoNetwork = geoNetwork[names(geoNetwork) %in% c('continent', 'subContinent', 'country', 'networkDomain')]
+geoNetwork = geoNetwork[!names(geoNetwork) %in% c('cityId', 'latitude', 'longitude', 'networkLocation')]
 
 full$geoNetwork = NULL
 full = cbind(full, geoNetwork)
@@ -55,28 +57,28 @@ table(full$socialEngagementType)  # also dropping this column due to lack of inf
 full$socialEngagementType = NULL
 
 # totals 
-totals = paste("[", paste(full$totals, collapse = ", "), "]") %>% fromJSON()
-str(totals)
+totals = paste("[", paste(full$totals, collapse = ", "), "]") %>% fromJSON(flatten = T)
 
 table(totals$visits)  
 totals$visits = NULL
 
 table(totals$hits)
-totals$hits = as.numeric(totals$hits)
 summary(totals$hits)
+totals$hits = as.numeric(totals$hits)
 
 table(totals$pageviews)
 totals$pageviews = as.numeric(totals$pageviews)
+totals$pageviews[is.na(totals$pageviews)] = 0
 summary(totals$pageviews)
 
 table(totals$bounces)
 which(is.na(totals$bounces))
-totals$bounces[is.na(totals$bounces)] = 0
 totals$bounces = as.numeric(totals$bounces)
+totals$bounces[is.na(totals$bounces)] = -1
 
 table(totals$newVisits)
-totals$newVisits[is.na(totals$newVisits)] = 0
 totals$newVisits = as.numeric(totals$newVisits)
+totals$newVisits[is.na(totals$newVisits)] = -1
 
 range(totals$transactionRevenue, na.rm = T)   # The target variable
 totals$transactionRevenue = as.numeric(totals$transactionRevenue)
@@ -97,41 +99,60 @@ table(df$criteriaParameters)
 df$criteriaParameters = NULL
 
 table(df$page)
-df$page[is.na(df$page)] = 0
+df$page[is.na(df$page)] = -1
+
 table(df$slot)
+sum(is.na(df$slot)) 
+df$slot[is.na(df$slot)] = -1
 
 table(df$gclId)
-df$gclId = NULL
+sum(is.na(df$gclId))
+df$gclId[is.na(df$gclId)] = -1
 
 table(df$adNetworkType)
+sum(is.na(df$adNetworkType))
+df$adNetworkType[is.na(df$adNetworkType)] = -1
+
 table(df$isVideoAd)
-df$isVideoAd = ifelse(is.na(df$isVideoAd), 1, 0)
+df$isVideoAd = ifelse(is.na(df$isVideoAd), -1, 1)
 
 trafficSource = cbind(trafficSource, df)
 trafficSource$adwordsClickInfo = NULL
-str(trafficSource)
 
 table(trafficSource$isTrueDirect)
-trafficSource$isTrueDirect = ifelse(is.na(trafficSource$isTrueDirect), 0, 1)
+trafficSource$isTrueDirect = ifelse(is.na(trafficSource$isTrueDirect), -1, 1)
+
+sum(is.na(trafficSource$referralPath))
+trafficSource$referralPath = ifelse(is.na(trafficSource$referralPath), -1, 1)
+table(trafficSource$referralPath)
 
 table(trafficSource$adContent)
+sum(is.na(trafficSource$adContent))
+trafficSource$adContent[is.na(trafficSource$adContent)] = -1
 
-trafficSource$referralPath = NULL
+table(trafficSource$campaignCode)
 trafficSource$campaignCode = NULL
 
+table(trafficSource$campaign)
+
+table(trafficSource$source)
+trafficSource$source = gsub(pattern = '.com', replacement = '', x = trafficSource$source)
+trafficSource$source = gsub(pattern = 'm.', replacement = '', x = trafficSource$source)
 trafficSource$source[grepl(pattern = 'google', x = trafficSource$source)] = 'google'
 trafficSource$source[grepl(pattern = 'yahoo', x = trafficSource$source)] = 'yahoo'
 trafficSource$source[grepl(pattern = 'youtube', x = trafficSource$source)] = 'youtube'
-trafficSource$source[grepl(pattern = 'reddit', x = trafficSource$source)] = 'reddit'
 trafficSource$source[grepl(pattern = 'facebook', x = trafficSource$source)] = 'facebook'
+trafficSource$source[grepl(pattern = 'bing', x = trafficSource$source)] = 'bing'
+trafficSource$source[grepl(pattern = 'reddit', x = trafficSource$source)] = 'reddit'
+trafficSource$source[grepl(pattern = 'github', x = trafficSource$source)] = 'github'
+trafficSource$source[grepl(pattern = 'blackboard', x = trafficSource$source)] = 'blackboard'
+trafficSource$source[grepl(pattern = 'search', x = trafficSource$source)] = 'search'
 table(trafficSource$source)
 
-a = trafficSource %>%
-  group_by(source) %>%
-  count() %>%
-  filter(n < 1000)
+table(trafficSource$medium)
 
-trafficSource$source[trafficSource$source %in% a$source] = 'other'
+table(trafficSource$keyword)
+trafficSource$keyword[is.na(trafficSource$keyword)] = -1
 
 full = cbind(full, trafficSource)
 full$trafficSource = NULL
@@ -417,7 +438,7 @@ ggplot(train, aes(x = visitNumber, y = logRevenue)) +
 
 
 
-## 4. Cleaning and splitting the data ####
+## 4. Feature Enginerring ####
 str(full)
 
 # splitting date & time into each column
@@ -426,51 +447,84 @@ full$month = month(full$date) %>% as.factor()
 full$day = day(full$date) %>% as.factor()
 full$wday = wday(full$date) %>% as.factor()
 full$week = week(full$date) %>% as.factor()
+
+full$day2 = day(full$visitStartTime) - day(full$date)
 full$hour = hour(full$visitStartTime) %>% as.factor()
 full$minute = minute(full$visitStartTime) %>% as.factor()
 
-# removing some observations which takes small proportion
-b = full %>%
-  group_by(browser) %>%
-  count() %>%
-  filter(n < 5000)
-
-full$browser[full$browser %in% b$browser] = 'other'
-full$browser[full$browser == 'Safari (in-app)'] = 'Safari'
-table(full$browser)
-
-b = full %>%
-  group_by(source) %>%
-  count() %>%
-  filter(n < 3000)
-full$source[full$source %in% b$source] = 'other'
-table(full$source)
-
 # transforming scales 
-full$logRevenue = log(full$transactionRevenue)
 full$logvisitNumber = log(full$visitNumber)
 full$loghits = log(full$hits)
-
-summary(full$pageviews)
-full$pageviews[is.na(full$pageviews)] = 1
 full$logpageviews = log(full$pageviews)
+full$isMobile = ifelse(full$isMobile == TRUE, 1, 0) %>% as.factor()
 
-# replacing na's into 'Other' 
-str(full)
-table(full$slot)
-full$slot[is.na(full$slot)] = 'Other'
-sum(is.na(full$adNetworkType))
-full$adNetworkType[is.na(full$adNetworkType)] = 'Other'
+# group features
+fn <- funs(mean, median, var, min, max, sum, n_distinct)
+
+sum_by_month <- full %>%
+  select(month, hits, pageviews) %>% 
+  group_by(month) %>% 
+  summarise_all(fn) 
+
+sum_by_day <- full %>%
+  select(day, hits, pageviews) %>% 
+  group_by(day) %>% 
+  summarise_all(fn) 
+
+sum_by_country <- full %>%
+  select(country, hits, pageviews) %>% 
+  group_by(country) %>% 
+  summarise_all(fn) 
+
+sum_by_city <- full %>%
+  select(city, hits, pageviews) %>% 
+  group_by(city) %>% 
+  summarise_all(fn) 
+
+sum_by_op <- full %>%
+  select(operatingSystem, hits, pageviews) %>% 
+  group_by(operatingSystem) %>% 
+  summarise_all(fn) 
+
+sum_by_dc <- full %>%
+  select(deviceCategory, hits, pageviews) %>% 
+  group_by(deviceCategory) %>% 
+  summarise_all(fn) 
+
+sum_by_source <- full %>%
+  select(source, hits, pageviews) %>% 
+  group_by(source) %>% 
+  summarise_all(fn) 
+
+sum_by_medium <- full %>%
+  select(medium, hits, pageviews) %>% 
+  group_by(medium) %>% 
+  summarise_all(fn) 
+
+sum_by_nd <- full %>%
+  select(networkDomain, hits, pageviews) %>% 
+  group_by(networkDomain) %>% 
+  summarise_all(fn) 
+
+full = full %>%
+  left_join(sum_by_city, by = 'city', suffix = c('', '_city')) %>%
+  left_join(sum_by_country, by = 'country', suffix = c('', '_country')) %>%
+  left_join(sum_by_day, by = 'day', suffix = c('', '_day')) %>%
+  left_join(sum_by_dc, by = 'deviceCategory', suffix = c('', '_dc')) %>%
+  left_join(sum_by_medium, by = 'medium', suffix = c('', '_medium')) %>%
+  left_join(sum_by_month, by = 'month', suffix = c('', '_month')) %>%
+  left_join(sum_by_nd, by = 'networkDomain', suffix = c('', '_nd')) %>%
+  left_join(sum_by_op, by = 'operatingSystem', suffix = c('', '_op')) %>%
+  left_join(sum_by_source, by = 'source', suffix = c('', '_source')) 
 
 # selecting subset of variables which will be used for fitting the models 
-full_df = full[, !names(full) %in% c('date', 'fullVisitorId', 'sessionId', 'visitId', 'visitNumber', 'visitStartTime', 'networkDomain', 
-                                     'hits', 'pageviews', 'transactionRevenue', 'keyword', 'adContent')]
-str(full_df)
-full_df = full_df[, c(26, 1:25, 27:29)]
+full$logRevenue = log(full$transactionRevenue)
+
+full_df = full[, !names(full) %in% c('date', 'fullVisitorId', 'sessionId', 'visitId', 'visitNumber', 'visitStartTime',
+                                     'networkDomain', 'hits', 'pageviews', 'transactionRevenue')]
 
 full_df = full_df %>%
-  mutate_if(is.character, factor) %>%
-  mutate(isMobile = ifelse(isMobile == FALSE, 0, 1))
+  mutate_if(is.character, factor)
 
 # splitting data into trainset, validset, and testset
 part = 1:903653
@@ -483,6 +537,9 @@ tr = tr[ind == 1, ]
 
 te = full_df[-part, ]
 
+rm(a, device, df, fn, geoNetwork, sum_by_city, sum_by_country, sum_by_day, sum_by_dc, sum_by_medium, 
+   sum_by_month, sum_by_nd, sum_by_op, sum_by_source, test, totals, trafficSource, train)
+gc()
 
 ## 5. Fitting the models ####
 ## 5-1. GBM 
@@ -504,6 +561,7 @@ full_df2 = full_df %>%
   mutate_if(is.factor, as.integer)
 str(full_df2)
 
+memory.limit(56000)
 part = 1:903653
 tr_xgb = full_df2[part, ]
 te_xgb = full_df2[-part, ]
@@ -512,26 +570,26 @@ tr_xgb$logRevenue[is.na(tr_xgb$logRevenue)] = 0
 val_xgb = tr_xgb[ind == 2, ]
 tr_xgb = tr_xgb[ind == 1, ]
 
-dtr = xgb.DMatrix(data = data.matrix(tr_xgb[, -1]), label = tr_xgb$logRevenue)
-dval = xgb.DMatrix(data = data.matrix(val_xgb[, -1]), label = val_xgb$logRevenue)
-dte = xgb.DMatrix(data = data.matrix(te_xgb[, -1]), label = te_xgb$logRevenue)
+dtr = xgb.DMatrix(data = data.matrix(tr_xgb[, -ncol(tr_xgb)]), label = tr_xgb$logRevenue)
+dval = xgb.DMatrix(data = data.matrix(val_xgb[, -ncol(val_xgb)]), label = val_xgb$logRevenue)
+dte = xgb.DMatrix(data = data.matrix(te_xgb[, -ncol(te_xgb)]), label = te_xgb$logRevenue)
 
 # training a xgb model
 myParam = list(objective = 'reg:linear', 
-               eval_metric = 'mae',
-               eta = .025,
+               eval_metric = 'rmse',
+               eta = .05,
                max_depth = 8, 
                min_child_weight = 10,
                subsample = .7,
-               colsample_bytree = .5)
+               colsample_bytree = .7)
 
 cv = xgb.cv(data = dtr, 
             params = myParam, 
             nrounds = 3000,
             nfold = 5, 
-            early_stopping_rounds = 100, 
+            early_stopping_rounds = 200, 
             maximize = F, 
-            print_every_n = 50)
+            print_every_n = 100)
 
 a = cv$evaluation_log$test_mae_mean %>% which.min()
 cv$evaluation_log[a]
