@@ -11,11 +11,24 @@ output: html_document
 ## 1. Exloratory Data Anaylsis 
  
  
- This is an Exploratory Data Analysis for the *Google Analytics Customer Revenue Prediction* competition. We are to predict the natural log of the sum of all transactions per user. I skipped all the data pre-processing steps I took. All the code and data set for this article are available on [GitHub](https://github.com/jjone36/myKaggle). Okay so let's take a look at what kind of data our train set has. 
+ This is an Exploratory Data Analysis for the *Google Analytics Customer Revenue Prediction* competition. We are to predict the natural log of the sum of all transactions per user. for every user in the test set, the target is:
+
+$$y_{user} = \sum_{i=1}^n transaction_{user_i}$$
+
+$$target_{user} = ln(y_{user}+1).$$
+
+Submissions are scored on the root mean squared error, which is defined as:
+
+$$RMSE = \sqrt{\frac{1}{n} \sum_{i=1}^n (y_i - \widehat{y_i})^2},$$
+
+where $\widehat{y}$ is the predicted revenue for a customer and $y$ is the natural log of the actual revenue value.
+
+ I skipped all the data pre-processing steps I took. All the code and data set for this article are available on [GitHub](https://github.com/jjone36/myKaggle). Okay now let's have a look at the dataset.
  
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE)
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set()
 library(tidyverse)
+library(data.table)
 library(jsonlite)
 library(ggthemes)
 library(magrittr)
@@ -24,7 +37,7 @@ library(rebus)
 library(gridExtra)
 ```
 
-```{r}
+```{r echo=FALSE}
 train = read.csv('gstore_tr.csv')
 
 train$date = as.Date(train$date)
@@ -32,14 +45,9 @@ train$date = as.Date(train$date)
 glimpse(train)
 ```
 
-
-
 ### 1-1. The target variable : Transaction Revenue 
 
-
-
- As you can see above, Our target variable 'transaction Revenue' has lots of NAs and we can guess they could be deemed as just no transaction occurred. So we can impute 0. Additionally. the range of the target variable is quite large that it's better to transform data into log scaled. If we plot the distribution of the 'logRevenue', the log-scaled of 'transaction Revenue', is like below.  
-
+ As you can see above, Our target variable 'transaction Revenue' has lots of NAs and we can guess they could be deemed as just no transaction occurred. Additionally. the range of the target variable is quite large that it's better to transform data into log scaled. If we plot the distribution of the 'logRevenue', the log-scaled of 'transaction Revenue', is like below.  
 
 ```{r}
 train$logRevenue = log(train$transactionRevenue)
@@ -55,10 +63,7 @@ train %>%
   theme_bw()
 ```
 
-
-
-Another variable that catches my eyes is 'visit Number', or the number of visit of a user, cause ~~~. So I will look into the relations of log-scaled transaction Revenue and visit Number with other variables. As like below, most of the 'visit Number' are 1 and has exponentially decreasing distribution like below, which I filtered the variable over 100. 
-
+ Another variable that catches our eyes is 'visit Number', or the number of visit of a user, cause It will definitely related to the interest and purchase of customers. So I will look into the relations of log-scaled transaction Revenue and visit Number with other variables. As like below, most of the 'visit Number' are 1 and has exponentially decreasing distribution like below, which I filtered the variable over 100. 
 
 ```{r}
 summary(train$visitNumber)
@@ -69,14 +74,9 @@ train %>%
   ggplot(aes(x = visitNumber, y = n)) + geom_col()
 ```
 
-
-
 ### 2-1. Which channel is the most profitable?
 
-
-
  There are 7 major channel groups. Organic search is the most frequently used channel and Social and Direct it the next followers.
-
 
 ```{r}
 table(train$channelGrouping)
@@ -86,9 +86,7 @@ myTheme = theme(axis.text.x = element_text(angle = 45, hjust = 1),
                 panel.grid.major = element_line(color = 'grey90'))
 ```
 
-
  If we get the total revenue per each channel grouping, we can see that Referral is the highest, which is 4th in visit Number. On the other hand, We can see that the Social, the 3rd highest in visit Number, doesn't bring that much revenue in the second plot. This can be inferred there are considerable difference in profit drawn from each channel.      
-
 
 ```{r}
 cg_p1 = train %>%
@@ -127,8 +125,6 @@ train %>%
   theme_bw()
 ```
 
-
-
 ### 2-2. Which device do the users prefer?
 
 
@@ -153,8 +149,6 @@ train %>%
   labs(x = 'Device Category', y = 'Revenue (log-scaled)') + 
   theme_bw()
 ```
-
-
 
 ### 2-3. Who are the major users?  
 
@@ -291,7 +285,6 @@ train %>%
 
 
  The total revenue over the time period has the two peak time at first week of December and May. If we continue to think with the plot we saw with the number of visit verse time, people seem to start surfing the web from Octorber and make actual purchases from the last week of Noverbem. There is another peak on first week of May although we have no clue what happened during that period. The actual transaction revenue and its time can be seen like above.  
-
  
  
 ### 2-5. When do the uses usually order google swag products? 
@@ -353,7 +346,7 @@ browser_p2 = train %>%
   ggplot(aes(x = reorder(browser, prop_revenue), y = prop_revenue)) + 
   geom_col(fill = 'coral1') + 
   coord_flip() +
-  labs(y = 'Total Revenue / Visit Numbers', x = NULL, title = 'Proportional Revenue per Browser') +
+  labs(y = 'Total Revenue / Visit Numbers', x = NULL, title = 'Proportional Revenue') +
   theme_bw()
 
 grid.arrange(browser_p1, browser_p2, ncol = 2)
@@ -405,7 +398,7 @@ grid.arrange(os_p1, os_p2, nrow = 2)
 
 
 ```{r}
-train %>%   
+p_s = train %>%   
   group_by(source) %>%
   count() %>%
   arrange(desc(n)) %>%
@@ -415,7 +408,7 @@ train %>%
   labs(x = NULL, y = NULL, title = 'Visit Number per Source') + 
   myTheme
 
-train %>%
+p_m = train %>%
   group_by(medium) %>%
   count() %>%
   arrange(desc(n)) %>%
@@ -426,6 +419,8 @@ train %>%
   labs(x = NULL, y = NULL, title = 'Visit Number per Medium') +
   theme_bw()
 
+grid.arrange(p_s, p_m, nrow = 1)
+
 train %>%
   filter(!is.na(keyword) & keyword != '(not provided)') %>%
   group_by(keyword) %>%
@@ -433,8 +428,6 @@ train %>%
   arrange(desc(n)) %>%
   head(10)
 ```
-
-
 
 ### 2-9. Is there any tendency 
 
@@ -453,6 +446,7 @@ train %>%
   theme_bw()
 ```
 
-
-
+## Conclusion
+ 
+ We walked through several variables and the relationships with visit numbers and revenue so far. The device categories, browsers, and operation systems have some preferences among customers. The revenue scale has a significant difference according to regions like countries and continents. Lastly time is highly related to the visit numbers and revenue. There are high seasons during a year and people tend to make a purchase on certain weekdays. Therefore, in feature engineering, splitting the time into parts is required for the accuracy of fitting. 
 
