@@ -1,5 +1,5 @@
 # myKaggle
-This is a repository of the works of Kaggle competitions or dataset. (Sorted by latest)
+This is a repository for the works of Kaggle competitions or dataset. (Sorted by latest)
 
 > NLP_toxic.R : building a model able to detect different types of toxicity held as 'Toxic Comment Classification Challenge'  
 
