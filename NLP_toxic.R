@@ -11,7 +11,7 @@ library(glmnet)
 library(xgboost)
 
 # This is the full code for the competition 'Toxic Comment Classification Challenge' held in Kaggle.
-# The project is to build a model that's capable of deecting differnet types of toxicity. 
+# The project is to build a model that's capable of detecting different types of toxicity. 
 # You can find more details and the dataset here : https://www.kaggle.com/c/jigsaw-toxic-comment-classification-challenge
 
 # 1. Reading the dataset ####
