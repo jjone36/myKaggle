@@ -11,5 +11,5 @@ This is a repository for the works of Kaggle competitions or dataset. (Sorted by
  - Analyzing a Google Merchandise Store customer dataset to predict revenue per customer held as 'Google Analytics customer Revenue Prediction' 
 
 > Happiness.R 
- - Exploratory data analysis about the state of global happiness (https://www.kaggle.com/unsdsn/world-happiness/home) 
+ - Exploratory data analysis about the state of global happiness 
     
